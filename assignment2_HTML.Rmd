@@ -1,0 +1,213 @@
+---
+title: "Web Scraping - Assignment 2"
+author: "Fanni Kiss"
+date: "`r Sys.Date()`"
+output:
+  prettydoc::html_pretty:
+    theme: architect
+    highlight: github
+---
+
+## Introduction
+
+Current report describe the steps of a web scraping project prepared for CEU - Coding 2 in 2020/2021.
+The aim of the project is to scrape real estate advertisements from the largest independent real estate site of Hungary, "Ingatlan.com". The report demonstrates the steps of the web scraping process.
+
+### Searching criteria
+
+The link of the scraped website: https://ingatlan.com/
+I applied the searching parameters below:
+* For sale (Eladó)
+* Apartment (Lakás)
+* Chosen districts: 6, 7, 8, 9, 13
+* Price range: 0-23 million HUF
+* At least 30 sqm
+* From floor half
+* Lease rights hidden (Bérleti jog elrejtése) 
+
+The link that lists the results: https://ingatlan.com/szukites/elado+lakas+nem-berleti-jog+ix-ker+vi-ker+vii-ker+viii-ker+xiii-ker+23-mFt-ig+30-m2-felett+felemelet-10-felett-emelet+ix-vi-vii-viii-xiii-ker?
+
+
+```{r libraries}
+library(data.table)
+library(rvest)
+```
+
+### Scraping the data from one sheet
+
+Firstly, I opened up the sheet of the first result and scraped the data from in. I saved it into a function, which returns a data frame. 
+
+```{r  echo=FALSE,warning=FALSE,message=FALSE,error=FALSE}
+
+my_url <- 'https://ingatlan.com/viii-ker/elado+lakas/tegla-epitesu-lakas/31832257'
+
+# scraping data from one sheet
+
+get_data_sheet <- function(my_url) {
+  print(my_url)
+  f <- read_html(my_url)
+  data_list <- list()
+  
+  # add a 'link' column with the link
+  data_list[['Link']] <- my_url
+  
+  # add the ID
+  data_list[['ID']] <- f %>% html_node('.listing-id') %>% html_text()
+  
+  # add the title
+  data_list[['Title']] <- f %>% html_node('.js-listing-title') %>% html_text()
+  
+  # add price, square meter, number of rooms
+  tkeys <- f %>% html_nodes('.parameter-title') %>% html_text()
+  tvalues <- f %>% html_nodes('.parameter-value') %>% html_text()
+  if (length(tkeys) == length(tvalues)) {
+    print('good base info data')
+    for (i in 1:length(tkeys)) {
+      data_list[[  tkeys[i]  ]] <- tvalues[i]
+    }
+  }
+  
+  # add details from table
+  tkeys <- f %>% html_nodes('td:nth-child(1)') %>% html_text()
+  tvalues <- f %>% html_nodes('td:nth-child(2)') %>% html_text()
+  if (length(tkeys) == length(tvalues)) {
+    print('good base info data')
+    for (i in 1:length(tkeys)) {
+      data_list[[  tkeys[i]  ]] <- tvalues[i]
+    }
+  }
+  
+  # add the description
+  data_list[['Description']] <- f %>% html_node('.long-description') %>% html_text()
+  
+  return(data_list)
+}
+
+get_data_sheet(my_url)
+
+
+df <- rbindlist(lapply(my_url, get_data_sheet), fill=T)
+View(df)
+```
+### Scraping the results of multiple pages
+
+Secondly, I created a function, which scrapes the data from each sheets from page 1. The result is the data of the first 20 real estate advertisements. 
+
+```{r echo=FALSE,warning=FALSE,message=FALSE,error=FALSE}
+# link for the results (1st page)
+search_link <-  'https://ingatlan.com/szukites/elado+lakas+nem-berleti-jog+ix-ker+vi-ker+vii-ker+viii-ker+xiii-ker+23-mFt-ig+30-m2-felett+felemelet-10-felett-emelet+ix-vi-vii-viii-xiii-ker?'
+
+## creating a function to find the URLs of each result on the 1st page
+
+search_results_links <- function(search_link) {
+  s <- read_html(search_link)
+  write_html(s, 's.html')
+  result_url <- s %>% html_nodes('.listing__thumbnail') %>% html_attr('href')
+  my_url <- c(paste0("https://ingatlan.com", result_url))
+  return(my_url)
+}
+
+first_page_urls <- search_results_links(search_link)
+
+# get the data from the 1st page
+df <- rbindlist(lapply(first_page_urls, get_data_sheet), fill=T)
+View(df)
+```
+To collect the data from the further pages, I created another function, which goes through all the pages and scrape all the data from each sheet from the first 10 pages. The result is a data frame about 200 real estate advertisements.
+
+```{r echo=FALSE,warning=FALSE,message=FALSE,error=FALSE}
+## creating a function to go through pages and find the URLs of each result
+
+get_all_results_links <- function(number_of_page=10) {
+  pages <- c('https://ingatlan.com/szukites/elado+lakas+nem-berleti-jog+ix-ker+vi-ker+vii-ker+viii-ker+xiii-ker+23-mFt-ig+30-m2-felett+felemelet-10-felett-emelet+ix-vi-vii-viii-xiii-ker', paste0('https://ingatlan.com/szukites/elado+lakas+nem-berleti-jog+ix-ker+vi-ker+vii-ker+viii-ker+xiii-ker+23-mFt-ig+30-m2-felett+felemelet-10-felett-emelet+ix-vi-vii-viii-xiii-ker?page=',2:number_of_page))
+  all_my_url <- unlist(c(lapply(pages, search_results_links)))
+  return(all_my_url)
+}
+
+all_my_url <- get_all_results_links(10)
+
+## get the data from multiple pages
+
+final_df <- rbindlist(lapply(all_my_url, get_data_sheet), fill=T)
+View(final_df)
+```
+### Data cleaning
+
+To clean the scraped data, I dropped columns, which do not contain relevant information. Then I translated the columns from Hungarian to English. Then I turned some character columns into numeric columns for the further analysis. 
+
+```{r echo=FALSE,warning=FALSE,message=FALSE,error=FALSE}
+# data cleaning
+
+# drop columns
+final_df <- final_df[ , -c(10, 16, 17)]
+final_df <- final_df[ , -c(23, 24, 25, 27)]
+
+# renaming colums
+colnames(final_df)[4] <- "Area"
+colnames(final_df)[5] <- "Number_of_Rooms"
+colnames(final_df)[6] <- "Price"
+colnames(final_df)[7] <- "Condition"
+colnames(final_df)[8] <- "Year_of_Construction"
+colnames(final_df)[9] <- "Comfort_level"
+colnames(final_df)[10] <- "Floor"
+colnames(final_df)[11] <- "Floors_of_Building"
+colnames(final_df)[12] <- "Elevator"
+colnames(final_df)[13] <- "Inner_height"
+colnames(final_df)[14] <- "Heating"
+colnames(final_df)[15] <- "Bathroom_and_Toilet"
+colnames(final_df)[16] <- "Orientation"
+colnames(final_df)[17] <- "View"
+colnames(final_df)[18] <- "Garden_Connection"
+colnames(final_df)[19] <- "Attic"
+colnames(final_df)[20] <- "Parking"
+colnames(final_df)[22] <- "Overhead"
+colnames(final_df)[23] <- "Balcony"
+
+View(final_df)
+
+# removing "m2" from "Area" column 
+final_df$Area = substr(final_df$Area,1,nchar(final_df$Area)-2)
+
+# removing "millió Ft" from "Price" column
+final_df$Price = substr(final_df$Price,1,nchar(final_df$Price)-9)
+
+# from character to numeric
+final_df <- transform(final_df, Area = as.numeric(Area),
+                      Price = as.numeric(Price))
+```
+
+## Writing out the .csv
+
+After cleaning the data, I wrote put the data table in .csv format. The .csv is available on my GitHub repo.
+
+```{r}
+#writing out data frame to csv
+
+write.csv(final_df, "C:/Users/Fandurka/Google Drive/CEU/Web_scraping/assignment2/real_estate_ads.csv")
+```
+
+
+### Insights
+
+Finally, I created two scatterplots. The first one illustrates that larger area comes with higher prices. The second one illustrates that higher floor also comes with higher prices, except for one outlier value.
+
+```{r echo=FALSE,warning=FALSE,message=FALSE,error=FALSE}
+## scatterplot
+
+library(ggplot2)
+final_df %>% 
+  ggplot(aes(x=Area , y=Price)) + 
+  geom_point()+
+  labs(title='Association between price and area', y='Price (million HUF)', x = 'Area (square meter)')
+
+final_df %>% 
+  ggplot(aes(x=Floor , y=Price)) + 
+  geom_point()+
+  labs(title='Association between price and floor', y='Price (million HUF)', x = 'Floor of the apartman')
+
+```
+## Conclusion
+
+To sum up, the web scraping project made it possible to scrape detailed data of real estate advertisements not only from the searching result page, but also from each advertisement sheet. Due to the functions, it can scrape the data from multiple pages and make it possible to create large datasets after diverse searches on Ingatlan.com.
+The project can be developed further by cleaning the data more thoroughly. The location would be an interesting dimension for the further analysis.
+
